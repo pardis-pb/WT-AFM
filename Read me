@@ -1,0 +1,153 @@
+# wpt_harmonic_extract
+
+**Wavelet-based harmonic amplitude & phase extraction for MATLAB**
+
+Extracts instantaneous amplitude envelopes for user-defined harmonics of a fundamental frequency and a second frequency of interest, plus the wavelet-coherence phase relative to a drive/reference signal.
+
+The method chains two transforms:
+1. **Wavelet Packet Transform** (`modwptdetails`) – isolates each target frequency band.
+2. **Continuous Wavelet Transform** (`cwt`) – recovers instantaneous amplitude within each band.
+3. **Wavelet Coherence** (`wcoherence`) – computes instantaneous phase between the signal and the drive at the fundamental frequency.
+
+Designed for long signals (tens of millions of samples); processing is chunked to stay within memory limits.
+
+---
+
+## Requirements
+
+| Requirement | Notes |
+|---|---|
+| MATLAB R2019b or later | `arguments` block syntax |
+| **Wavelet Toolbox** | `modwptdetails`, `cwt`, `wcoherence` |
+
+---
+
+## Installation
+
+Clone or download the repository, then add the folder to your MATLAB path:
+
+```matlab
+addpath('/path/to/wpt_harmonic_extract')
+```
+
+---
+
+## Quick Start
+
+```matlab
+fs = 1e6;          % 1 MHz sampling
+f1 = 29.566e3;     % fundamental frequency
+f2 = 219.345e3;    % second frequency of interest
+t  = (0:fs-1)/fs;
+
+sig = sin(2*pi*f1*t) + 0.5*sin(2*pi*2*f1*t) + 0.3*sin(2*pi*f2*t) + 0.05*randn(size(t));
+fd  = sin(2*pi*f1*t + 0.4);   % drive signal with known phase offset
+
+[amp_all, phase_f1, freq_labels] = wpt_harmonic_extract(sig, fd, fs, f1, 4, f2);
+```
+
+This extracts:
+- `amp_all(1,:)` → amplitude at *f1*
+- `amp_all(2,:)` → amplitude at *2f1*
+- `amp_all(3,:)` → amplitude at *3f1*
+- `amp_all(4,:)` → amplitude at *4f1*
+- `amp_all(5,:)` → amplitude at *f2*
+- `phase_f1`     → wavelet-coherence phase between `sig` and `fd` at *f1*
+
+---
+
+## Signature
+
+```matlab
+[amp_all, phase_f1, freq_labels] = wpt_harmonic_extract(sig, fd, fs, f1, num_harmonics, f2)
+[amp_all, phase_f1, freq_labels] = wpt_harmonic_extract(sig, fd, fs, f1, num_harmonics, f2, Name=Value)
+```
+
+### Required arguments
+
+| Argument | Size | Description |
+|---|---|---|
+| `sig` | 1×N | Signal under analysis |
+| `fd` | 1×N | Drive / reference signal (same length as `sig`) |
+| `fs` | scalar | Sampling frequency (Hz) |
+| `f1` | scalar | Fundamental frequency (Hz) |
+| `num_harmonics` | integer | Number of harmonics of *f1* to extract |
+| `f2` | scalar | Second frequency of interest (Hz) |
+
+### Optional name-value arguments
+
+| Name | Default | Description |
+|---|---|---|
+| `Wavelet` | `'db45'` | Wavelet family for `modwptdetails` |
+| `WPTLevel` | `7` | Decomposition level |
+| `Padding` | `2000` | Zero-padding per chunk (samples) to suppress edge artefacts |
+| `ChunkSize` | `1e6` | Samples per processing chunk; reduce if memory is limited |
+| `BandwidthExp` | `0.1` | Controls CWT frequency search window: `f_target × (exp(BandwidthExp)−1)/2` |
+| `Verbose` | `true` | Print progress to the command window |
+
+### Outputs
+
+| Output | Size | Description |
+|---|---|---|
+| `amp_all` | (num_harmonics+1) × N | Instantaneous amplitude; rows are harmonics then *f2* |
+| `phase_f1` | 1 × N | Wavelet-coherence phase at *f1* (radians) |
+| `freq_labels` | cell | Row labels, e.g. `{'1f1 (29566 Hz)', ..., 'f2 (219345 Hz)'}` |
+
+---
+
+## Warnings and Errors
+
+The function will **error** if:
+- `f1` or `f2` is at or above the Nyquist frequency (`fs/2`).
+- `sig` and `fd` have different lengths.
+- The Wavelet Toolbox licence is not available.
+
+The function will **warn** (and automatically clip) if:
+- `num_harmonics` would require frequencies above Nyquist – only the safe harmonics are computed.
+- `f1` and `f2` are within 1% of each other (potential band overlap).
+- Any harmonic coincides with `f2` within 1%.
+- `f2` is not cleanly contained in a WPT sub-band – the nearest band is used.
+- The signal is shorter than one chunk (edge effects may be significant).
+
+---
+
+## Plotting helper
+
+```matlab
+figure('Name', 'Harmonic amplitudes');
+n = size(amp_all, 1);
+t = (0:size(amp_all,2)-1) / fs;
+
+for row = 1:n
+    subplot(n+1, 1, row);
+    plot(t, amp_all(row,:));
+    ylabel(freq_labels{row});
+    grid on;
+end
+subplot(n+1, 1, n+1);
+plot(t, phase_f1);
+ylabel('Phase f_1 (rad)');  xlabel('Time (s)');
+grid on;
+```
+
+---
+
+## Algorithm overview
+
+```
+sig  ──► [modwptdetails]  ──► WPT sub-bands
+              │
+              ▼  (bands at k·f1 and f2)
+         [cwt per band]   ──► instantaneous amplitude  ──► amp_all
+
+sig & fd ──► [wcoherence]  ──► cross-wavelet spectrum
+                                      │
+                                      ▼ (at f1)
+                                   angle(·)  ──► phase_f1
+```
+
+Each long signal is processed in chunks of `ChunkSize` samples.  Each chunk is zero-padded by `Padding` samples on both sides before the transforms, and the padding region is discarded afterwards, minimising boundary artefacts.
+
+---
+
+
